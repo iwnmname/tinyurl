@@ -70,8 +70,8 @@ POST /shorten
 ```json
 {
   "url": "https://example.com",
-  "alias": "example",    // опционально
-  "ttl_days": 7          // опционально
+  "alias": "example",
+  "ttl_days": 7         
 }
 ```
 
@@ -119,6 +119,6 @@ docker restart tinyurl
 # Удаление контейнера
 docker rm tinyurl
 
-# Удаление тома с данными (осторожно - удалит все ссылки!)
+# Удаление тома с данными
 docker volume rm tinyurl-data
 ```
