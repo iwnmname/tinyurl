@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  tinyurl:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - tinyurl-data:/data
+    environment:
+      - TINYURL_DB_PATH=file:/data/tinyurl.db?cache=shared&mode=rwc&_fk=1
+    restart: unless-stopped
+
+volumes:
+  tinyurl-data:
