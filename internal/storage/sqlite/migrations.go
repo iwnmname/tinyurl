@@ -10,6 +10,7 @@ import (
 	"strings"
 )
 
+//go:embed migrations/*.sql
 var migrationFS embed.FS
 
 func Migrate(ctx context.Context, db *sql.DB) error {

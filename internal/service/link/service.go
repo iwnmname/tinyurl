@@ -11,6 +11,11 @@ import (
 	"tinyurl/internal/repository"
 )
 
+var (
+	ErrNotFound  = errors.New("not found")
+	ErrAliasBusy = errors.New("alias is already in use")
+)
+
 type Service struct {
 	repo repository.LinkRepository
 }
@@ -19,47 +24,85 @@ func New(repo repository.LinkRepository) *Service {
 	return &Service{repo: repo}
 }
 
-func (s *Service) Shorten(ctx context.Context, url string) (string, error) {
+func (s *Service) Shorten(ctx context.Context, url, alias string, ttlDays int) (string, *time.Time, error) {
 	url = strings.TrimSpace(url)
+	alias = strings.TrimSpace(alias)
 	if url == "" {
-		return "", errors.New("empty url")
+		return "", nil, errors.New("empty url")
 	}
 
-	if ex, _ := s.repo.GetByURL(ctx, url); ex != nil {
-		return ex.Code, nil
+	if alias != "" {
+		if ex, _ := s.repo.GetByCode(ctx, alias); ex != nil && !isExpired(ex) {
+			return "", nil, ErrAliasBusy
+		}
 	}
 
-	for i := 0; i < 6; i++ {
-		code := genCode(7 + i%2)
-		if got, _ := s.repo.GetByCode(ctx, code); got != nil {
-			continue
-		}
-		err := s.repo.Create(ctx, &repository.Link{
-			Code:      code,
-			URL:       url,
-			CreatedAt: time.Now(),
-		})
-		if err != nil {
-			continue
-		}
-		return code, nil
+	var expiresAt *time.Time
+	if ttlDays > 0 {
+		t := time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour)
+		expiresAt = &t
 	}
-	return "", errors.New("cannot generate unique code")
+
+	if alias == "" {
+		if ex, _ := s.repo.GetByURL(ctx, url); ex != nil && !isExpired(ex) {
+			return ex.Code, ex.ExpiresAt, nil
+		}
+	}
+
+	code := alias
+	if code == "" {
+		for i := 0; i < 6; i++ {
+			cand := genCode(7 + i%2)
+			if got, _ := s.repo.GetByCode(ctx, cand); got == nil || isExpired(got) {
+				code = cand
+				break
+			}
+		}
+		if code == "" {
+			return "", nil, errors.New("cannot generate code")
+		}
+	}
+
+	l := &repository.Link{
+		Code:      code,
+		URL:       url,
+		ExpiresAt: expiresAt,
+	}
+	if err := s.repo.Create(ctx, l); err != nil {
+		return "", nil, err
+	}
+	return code, expiresAt, nil
 }
 
 func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 	code = strings.TrimSpace(code)
 	if code == "" {
-		return "", errors.New("empty code")
+		return "", ErrNotFound
 	}
 	l, err := s.repo.GetByCode(ctx, code)
 	if err != nil {
 		return "", err
 	}
-	if l == nil {
-		return "", errors.New("not found")
+	if l == nil || isExpired(l) {
+		return "", ErrNotFound
 	}
+	_ = s.repo.IncrementHit(ctx, code)
 	return l.URL, nil
+}
+
+func (s *Service) Stats(ctx context.Context, code string) (*repository.Link, error) {
+	l, err := s.repo.GetByCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	if l == nil {
+		return nil, ErrNotFound
+	}
+	return l, nil
+}
+
+func isExpired(l *repository.Link) bool {
+	return l.ExpiresAt != nil && time.Now().After(*l.ExpiresAt)
 }
 
 func genCode(n int) string {
