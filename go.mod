@@ -3,6 +3,7 @@ module tinyurl
 go 1.24.4
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/spf13/cobra v1.9.1
 	modernc.org/sqlite v1.38.2
 )

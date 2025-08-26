@@ -27,14 +27,14 @@ type Config struct {
 	Log  Log
 }
 
-func getEnv(key, def string) string {
+func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return def
 }
 
-func getDuration(key string, def time.Duration) time.Duration {
+func getdur(key string, def time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
@@ -46,17 +46,17 @@ func getDuration(key string, def time.Duration) time.Duration {
 func Load() Config {
 	return Config{
 		HTTP: HTTP{
-			Address:      getEnv("HTTP_ADDRESS", ":8080"),
-			BaseURL:      getEnv("BASE_URL", "http://localhost:8080"),
-			ReadTimeout:  getDuration("HTTP_READ_TIMEOUT", 5*time.Second),
-			WriteTimeout: getDuration("HTTP_WRITE_TIMEOUT", 10*time.Second),
-			IdleTimeout:  getDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
+			Address:      getenv("HTTP_ADDRESS", ":8080"),
+			BaseURL:      getenv("BASE_URL", "http://localhost:8080"),
+			ReadTimeout:  getdur("HTTP_READ_TIMEOUT", 5*time.Second),
+			WriteTimeout: getdur("HTTP_WRITE_TIMEOUT", 10*time.Second),
+			IdleTimeout:  getdur("HTTP_IDLE_TIMEOUT", 60*time.Second),
 		},
 		DB: DB{
-			DSN: getEnv("DATABASE_DSN", "file:tinyurl.db?_journal_mode=WAL&_busy_timeout=5000"),
+			DSN: getenv("DATABASE_DSN", "file:tinyurl.db?_journal_mode=WAL&_busy_timeout=5000"),
 		},
 		Log: Log{
-			Level: getEnv("LOG_LEVEL", "info"),
+			Level: getenv("LOG_LEVEL", "info"),
 		},
 	}
 }
