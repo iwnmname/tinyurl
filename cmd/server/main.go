@@ -1,30 +1,45 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	_ "modernc.org/sqlite"
-	"net/http"
+	"context"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"tinyurl/internal/db"
-	"tinyurl/internal/handlers"
+	"tinyurl/internal/app"
+	"tinyurl/internal/config"
 )
 
 func main() {
-	fmt.Println("Запуск TinyURL...")
+	cfg := config.Load()
 
-	database, err := db.InitDB("file:tinyurl.db?cache=shared&mode=rwc&_fk=1")
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	a, err := app.Build(ctx, cfg)
 	if err != nil {
-		log.Fatal("Ошибка при инициализации базы данных:", err)
+		panic(err)
 	}
-	defer database.Close()
+	a.Log.Info("server starting", "addr", cfg.HTTP.Address)
 
-	server := handlers.NewServer(database)
+	go func() {
+		if err := a.Server.Start(); err != nil {
+			a.Log.Error("server error", "err", err)
+			stop()
+		}
+	}()
 
-	http.HandleFunc("/shorten", server.ShortenHandler)
-	http.HandleFunc("/r/", server.RedirectHandler)
-	http.HandleFunc("/stats/", server.StatsHandler)
+	<-ctx.Done()
+	a.Log.Info("shutting down...")
 
-	fmt.Println("Сервер запущен на http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := a.Server.Shutdown(shCtx); err != nil {
+		a.Log.Error("shutdown error", "err", err)
+	}
+	if err := a.DBClose(); err != nil {
+		a.Log.Error("db close error", "err", err)
+	}
+	a.Log.Info("bye")
 }

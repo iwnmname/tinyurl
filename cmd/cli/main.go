@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -44,15 +47,24 @@ func main() {
 	rootCmd.AddCommand(shortCmd, statsCmd)
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
+func apiURL(base string, p string) (string, error) {
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	u.Path = path.Join(strings.TrimRight(u.Path, "/"), p)
+	return u.String(), nil
+}
+
 func shortURL(cmd *cobra.Command, args []string) error {
-	url := args[0]
+	longURL := args[0]
 	reqBody, err := json.Marshal(map[string]interface{}{
-		"url":      url,
+		"url":      longURL,
 		"alias":    alias,
 		"ttl_days": ttlDays,
 	})
@@ -60,29 +72,43 @@ func shortURL(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	resp, err := http.Post(serverURL+"/shorten", "application/json", bytes.NewBuffer(reqBody))
+	u, err := apiURL(serverURL, "/shorten")
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.Post(u, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return fmt.Errorf("ошибка при отправке запроса: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("сервер вернул ошибку %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("сервер вернул ошибку %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var result map[string]string
+	var result struct {
+		Code     string `json:"code"`
+		ShortURL string `json:"short_url"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
+		return fmt.Errorf("не удалось разобрать ответ: %w", err)
 	}
 
-	fmt.Println("Короткая ссылка:", result["short_url"])
+	fmt.Println("Короткая ссылка:", result.ShortURL)
 	return nil
 }
 
 func getStats(cmd *cobra.Command, args []string) error {
 	code := args[0]
-	resp, err := http.Get(serverURL + "/stats/" + code)
+
+	u, err := apiURL(serverURL, "/stats/"+code)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.Get(u)
 	if err != nil {
 		return fmt.Errorf("ошибка при отправке запроса: %v", err)
 	}
@@ -90,7 +116,7 @@ func getStats(cmd *cobra.Command, args []string) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("сервер вернул ошибку %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("сервер вернул ошибку %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var stats struct {
@@ -100,7 +126,7 @@ func getStats(cmd *cobra.Command, args []string) error {
 		HitCount  int     `json:"hit_count"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		return err
+		return fmt.Errorf("не удалось разобрать ответ: %w", err)
 	}
 
 	fmt.Println("URL:", stats.URL)
