@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"tinyurl/internal/config"
 	"tinyurl/internal/logger"
@@ -27,10 +28,6 @@ func Build(ctx context.Context, cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := sqlite.Migrate(ctx, db.DB); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
 
 	var linkRepo repository.LinkRepository = sqlrepo.NewLinkRepo(db.DB)
 	linkSvc := link.New(linkRepo)
@@ -45,6 +42,25 @@ func Build(ctx context.Context, cfg config.Config) (*App, error) {
 		cfg.HTTP.WriteTimeout,
 		cfg.HTTP.IdleTimeout,
 	)
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				repo := sqlrepo.NewLinkRepo(db.DB)
+				n, err := repo.PurgeDeleted(context.Background(), 24*time.Hour)
+				if err != nil {
+					log.Error("purge deleted links", "err", err)
+				} else if n > 0 {
+					log.Info("purged deleted links", "count", n)
+				}
+			}
+		}
+	}()
 
 	return &App{
 		Log:     log,

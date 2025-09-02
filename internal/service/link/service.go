@@ -14,6 +14,7 @@ import (
 var (
 	ErrNotFound  = errors.New("not found")
 	ErrAliasBusy = errors.New("alias is already in use")
+	ErrExpired   = errors.New("link expired")
 )
 
 type Service struct {
@@ -32,8 +33,17 @@ func (s *Service) Shorten(ctx context.Context, url, alias string, ttlDays int) (
 	}
 
 	if alias != "" {
-		if ex, _ := s.repo.GetByCode(ctx, alias); ex != nil && !isExpired(ex) {
-			return "", nil, ErrAliasBusy
+		ex, err := s.repo.GetByCode(ctx, alias)
+		if err != nil {
+			return "", nil, err
+		}
+		if ex != nil {
+			if !isExpired(ex) {
+				return "", nil, ErrAliasBusy
+			}
+			if err := s.repo.SoftDelete(ctx, alias); err != nil {
+				return "", nil, err
+			}
 		}
 	}
 
@@ -51,15 +61,10 @@ func (s *Service) Shorten(ctx context.Context, url, alias string, ttlDays int) (
 
 	code := alias
 	if code == "" {
-		for i := 0; i < 6; i++ {
-			cand := genCode(7 + i%2)
-			if got, _ := s.repo.GetByCode(ctx, cand); got == nil || isExpired(got) {
-				code = cand
-				break
-			}
-		}
-		if code == "" {
-			return "", nil, errors.New("cannot generate code")
+		var err error
+		code, err = s.generateCode(ctx)
+		if err != nil {
+			return "", nil, err
 		}
 	}
 
@@ -74,17 +79,33 @@ func (s *Service) Shorten(ctx context.Context, url, alias string, ttlDays int) (
 	return code, expiresAt, nil
 }
 
+func (s *Service) generateCode(ctx context.Context) (string, error) {
+	for i := 0; i < 6; i++ {
+		cand := genCode(7 + i%2)
+
+		got, _ := s.repo.GetByCode(ctx, cand)
+		if got == nil || isExpired(got) {
+			return cand, nil
+		}
+	}
+	return "", errors.New("cannot generate code")
+}
+
 func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 	code = strings.TrimSpace(code)
 	if code == "" {
 		return "", ErrNotFound
 	}
+
 	l, err := s.repo.GetByCode(ctx, code)
 	if err != nil {
 		return "", err
 	}
-	if l == nil || isExpired(l) {
+	if l == nil {
 		return "", ErrNotFound
+	}
+	if isExpired(l) {
+		return "", ErrExpired
 	}
 	_ = s.repo.IncrementHit(ctx, code)
 	return l.URL, nil
@@ -98,11 +119,32 @@ func (s *Service) Stats(ctx context.Context, code string) (*repository.Link, err
 	if l == nil {
 		return nil, ErrNotFound
 	}
+	if isExpired(l) {
+		return nil, ErrExpired
+	}
 	return l, nil
 }
 
 func isExpired(l *repository.Link) bool {
 	return l.ExpiresAt != nil && time.Now().After(*l.ExpiresAt)
+}
+
+func (s *Service) Delete(ctx context.Context, code string) error {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return ErrNotFound
+	}
+	l, err := s.repo.GetByCode(ctx, code)
+	if err != nil {
+		return err
+	}
+	if l == nil {
+		return ErrNotFound
+	}
+	if isExpired(l) {
+		return ErrExpired
+	}
+	return s.repo.SoftDelete(ctx, code)
 }
 
 func genCode(n int) string {

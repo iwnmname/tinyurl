@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"os/signal"
 	"syscall"
 	"time"
@@ -11,25 +12,39 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+
+	if err != nil {
+		log.Fatalf("loading config: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	a, err := app.Build(ctx, cfg)
+	appCtx := context.Background()
+
+	a, err := app.Build(appCtx, cfg)
 	if err != nil {
 		panic(err)
 	}
 	a.Log.Info("server starting", "addr", cfg.HTTP.Address)
 
+	serverErr := make(chan error, 1)
+
 	go func() {
 		if err := a.Server.Start(); err != nil {
 			a.Log.Error("server error", "err", err)
-			stop()
+			serverErr <- err
 		}
 	}()
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+		a.Log.Info("received shutdown signal")
+	case err := <-serverErr:
+		a.Log.Error("server failed", "err", err)
+	}
+
 	a.Log.Info("shutting down...")
 
 	shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -3,6 +3,8 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -31,9 +33,41 @@ func (h *Handlers) Shorten(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
 	var req ShortenRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
+	if err := dec.Decode(&req); err != nil {
+		var syntaxErr *json.SyntaxError
+		var unmarshalTypeErr *json.UnmarshalTypeError
+
+		switch {
+		case errors.Is(err, io.EOF):
+			http.Error(w, "empty body", http.StatusBadRequest)
+
+		case errors.As(err, &syntaxErr):
+			msg := fmt.Sprintf("malformed JSON (syntax error at pos %d)", syntaxErr.Offset)
+			http.Error(w, msg, http.StatusBadRequest)
+
+		case errors.As(err, &unmarshalTypeErr):
+			msg := fmt.Sprintf("invalid value for field %q (at pos %d)", unmarshalTypeErr.Field, unmarshalTypeErr.Offset)
+			http.Error(w, msg, http.StatusBadRequest)
+
+		case strings.HasPrefix(err.Error(), "json: unknown field "):
+			field := strings.TrimPrefix(err.Error(), `json: unknown field `)
+			msg := fmt.Sprintf("unknown field %s", field)
+			http.Error(w, msg, http.StatusBadRequest)
+
+		default:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+
+		h.log.Warn("shorten: bad JSON", "err", err)
+		return
+	}
+
+	if dec.More() {
+		http.Error(w, "only one JSON object allowed", http.StatusBadRequest)
 		return
 	}
 	code, expiresAt, err := h.svc.Shorten(r.Context(), req.URL, req.Alias, req.TTLDays)
@@ -61,10 +95,10 @@ func (h *Handlers) Shorten(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) Redirect(w http.ResponseWriter, r *http.Request) {
-	code := r.PathValue("code")
-	if code == "" {
-		code = strings.TrimPrefix(r.URL.Path, "/r/")
-		code = strings.TrimPrefix(code, "/")
+	code := strings.TrimPrefix(r.URL.Path, "/r/")
+	if code == "" || strings.Contains(code, "/") {
+		http.NotFound(w, r)
+		return
 	}
 	url, err := h.svc.Resolve(r.Context(), code)
 	if err != nil {
@@ -76,9 +110,10 @@ func (h *Handlers) Redirect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) Stats(w http.ResponseWriter, r *http.Request) {
-	code := r.PathValue("code")
-	if code == "" {
-		code = strings.TrimPrefix(r.URL.Path, "/stats/")
+	code := strings.TrimPrefix(r.URL.Path, "/stats/")
+	if code == "" || strings.Contains(code, "/") {
+		http.NotFound(w, r)
+		return
 	}
 	l, err := h.svc.Stats(r.Context(), code)
 	if err != nil {
@@ -99,4 +134,27 @@ func (h *Handlers) Stats(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	code := strings.TrimPrefix(r.URL.Path, "/delete/")
+	if code == "" {
+		http.Error(w, "code required", http.StatusBadRequest)
+		return
+	}
+
+	err := h.svc.Delete(r.Context(), code)
+	if err != nil {
+		if errors.Is(err, link.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "cannot delete", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -44,6 +44,14 @@ func main() {
 		RunE:  getStats,
 	}
 
+	delCmd := &cobra.Command{
+		Use:   "delete [code]",
+		Short: "Удалить короткую ссылку",
+		Args:  cobra.ExactArgs(1),
+		RunE:  deleteURL,
+	}
+	rootCmd.AddCommand(delCmd)
+
 	rootCmd.AddCommand(shortCmd, statsCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -59,6 +67,34 @@ func apiURL(base string, p string) (string, error) {
 	}
 	u.Path = path.Join(strings.TrimRight(u.Path, "/"), p)
 	return u.String(), nil
+}
+
+func deleteURL(cmd *cobra.Command, args []string) error {
+	code := args[0]
+	u, err := apiURL(serverURL, "/delete/"+code)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodDelete, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		fmt.Println("Deleted successfully")
+		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf("code %s not found", code)
+	default:
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 }
 
 func shortURL(cmd *cobra.Command, args []string) error {
@@ -83,21 +119,32 @@ func shortURL(cmd *cobra.Command, args []string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	switch code := resp.StatusCode; {
+	case code >= 200 && code < 300:
+
+		var result struct {
+			Code     string `json:"code"`
+			ShortURL string `json:"short_url"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return fmt.Errorf("не удалось разобрать ответ: %w", err)
+		}
+
+		fmt.Println("Короткая ссылка:", result.ShortURL)
+		return nil
+
+	case code >= 300 && code < 400:
+		loc := resp.Header.Get("Location")
+		return fmt.Errorf("unexpected redirect %d → %s", code, loc)
+
+	case code >= 400 && code < 500:
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("сервер вернул ошибку %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
+		return fmt.Errorf("client error %d: %s", code, strings.TrimSpace(string(body)))
 
-	var result struct {
-		Code     string `json:"code"`
-		ShortURL string `json:"short_url"`
+	default:
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server error %d: %s", code, strings.TrimSpace(string(body)))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("не удалось разобрать ответ: %w", err)
-	}
-
-	fmt.Println("Короткая ссылка:", result.ShortURL)
-	return nil
 }
 
 func getStats(cmd *cobra.Command, args []string) error {
@@ -110,32 +157,42 @@ func getStats(cmd *cobra.Command, args []string) error {
 
 	resp, err := http.Get(u)
 	if err != nil {
-		return fmt.Errorf("ошибка при отправке запроса: %v", err)
+		return fmt.Errorf("ошибка при отправке GET-запроса к %s: %w", u, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	switch status := resp.StatusCode; {
+	case status >= 200 && status < 300:
+		var stats struct {
+			URL       string  `json:"url"`
+			CreatedAt string  `json:"created_at"`
+			ExpiresAt *string `json:"expires_at,omitempty"`
+			HitCount  int     `json:"hit_count"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			return fmt.Errorf("не удалось разобрать ответ: %w", err)
+		}
+
+		fmt.Println("URL:", stats.URL)
+		fmt.Println("Создано:", stats.CreatedAt)
+		if stats.ExpiresAt != nil {
+			fmt.Println("Истекает:", *stats.ExpiresAt)
+		} else {
+			fmt.Println("Истекает: никогда")
+		}
+		fmt.Println("Количество переходов:", stats.HitCount)
+		return nil
+
+	case status >= 300 && status < 400:
+		loc := resp.Header.Get("Location")
+		return fmt.Errorf("unexpected redirect %d → %s", status, loc)
+
+	case status >= 400 && status < 500:
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("сервер вернул ошибку %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
+		return fmt.Errorf("client error %d: %s", status, strings.TrimSpace(string(body)))
 
-	var stats struct {
-		URL       string  `json:"url"`
-		CreatedAt string  `json:"created_at"`
-		ExpiresAt *string `json:"expires_at,omitempty"`
-		HitCount  int     `json:"hit_count"`
+	default:
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server error %d: %s", status, strings.TrimSpace(string(body)))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		return fmt.Errorf("не удалось разобрать ответ: %w", err)
-	}
-
-	fmt.Println("URL:", stats.URL)
-	fmt.Println("Создано:", stats.CreatedAt)
-	if stats.ExpiresAt != nil {
-		fmt.Println("Истекает:", *stats.ExpiresAt)
-	} else {
-		fmt.Println("Истекает: никогда")
-	}
-	fmt.Println("Количество переходов:", stats.HitCount)
-	return nil
 }
