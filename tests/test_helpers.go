@@ -1,36 +1,44 @@
 package tests
 
 import (
+	"context"
 	"database/sql"
-	"fmt"
+	"log/slog"
+	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
+
+	"tinyurl/internal/logger"
+	"tinyurl/internal/repository"
+	"tinyurl/internal/service/link"
+	"tinyurl/internal/storage/sqlite"
+	sqlrepo "tinyurl/internal/storage/sqlite/repository"
 )
 
-// go:coverage ignore
-func initTestDB() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", "file:test.db?mode=memory&cache=shared")
+func NewTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		t.Fatal(err)
 	}
-
-	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to configure SQLite: %w", err)
+	if err := sqlite.Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
 	}
+	return db
+}
 
-	_, err = db.Exec(`
-	CREATE TABLE IF NOT EXISTS links (
-	  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-	  code        TEXT    NOT NULL UNIQUE,
-	  url         TEXT    NOT NULL,
-	  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	  expires_at  TIMESTAMP NULL,
-	  hit_count   INTEGER NOT NULL DEFAULT 0
-	);
-	CREATE INDEX IF NOT EXISTS idx_links_expires_at ON links (expires_at);
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create schema: %w", err)
-	}
+type TestDeps struct {
+	DB  *sql.DB
+	Rep repository.LinkRepository
+	Svc *link.Service
+	Log *slog.Logger
+}
 
-	return db, nil
+func NewTestDeps(t *testing.T) *TestDeps {
+	t.Helper()
+	db := NewTestDB(t)
+	rep := sqlrepo.NewLinkRepo(db)
+	svc := link.New(rep)
+	log := logger.New("error")
+	return &TestDeps{DB: db, Rep: rep, Svc: svc, Log: log}
 }
