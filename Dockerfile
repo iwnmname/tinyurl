@@ -9,8 +9,6 @@ RUN go build -o tinyurl-server ./cmd/server/
 
 RUN go build -o tinyurl-cli ./cmd/cli/
 
-RUN go build -o tinyurl-migrate ./cmd/migrate
-
 
 FROM alpine:3.18
 
@@ -20,8 +18,6 @@ RUN apk --no-cache add ca-certificates
 
 COPY --from=builder /app/tinyurl-server .
 COPY --from=builder /app/tinyurl-cli .
-COPY --from=builder /app/db ./db
-COPY --from=builder /app/tinyurl-migrate .
 
 VOLUME /data
 

@@ -28,23 +28,9 @@ func New(repo repository.LinkRepository) *Service {
 func (s *Service) Shorten(ctx context.Context, url, alias string, ttlDays int) (string, *time.Time, error) {
 	url = strings.TrimSpace(url)
 	alias = strings.TrimSpace(alias)
+
 	if url == "" {
 		return "", nil, errors.New("empty url")
-	}
-
-	if alias != "" {
-		ex, err := s.repo.GetByCode(ctx, alias)
-		if err != nil {
-			return "", nil, err
-		}
-		if ex != nil {
-			if !isExpired(ex) {
-				return "", nil, ErrAliasBusy
-			}
-			if err := s.repo.SoftDelete(ctx, alias); err != nil {
-				return "", nil, err
-			}
-		}
 	}
 
 	var expiresAt *time.Time
@@ -53,30 +39,69 @@ func (s *Service) Shorten(ctx context.Context, url, alias string, ttlDays int) (
 		expiresAt = &t
 	}
 
-	if alias == "" {
-		if ex, _ := s.repo.GetByURL(ctx, url); ex != nil && !isExpired(ex) {
-			return ex.Code, ex.ExpiresAt, nil
-		}
+	if alias != "" {
+		return s.withAlias(ctx, url, alias, expiresAt)
 	}
 
-	code := alias
-	if code == "" {
-		var err error
-		code, err = s.generateCode(ctx)
-		if err != nil {
-			return "", nil, err
-		}
+	return s.withCode(ctx, url, expiresAt)
+}
+
+func (s *Service) withCode(ctx context.Context, url string, expiresAt *time.Time) (string, *time.Time, error) {
+	if existing, _ := s.repo.GetByURL(ctx, url); existing != nil && !isExpired(existing) {
+		return existing.Code, existing.ExpiresAt, nil
 	}
 
-	l := &repository.Link{
+	code, err := s.generateCode(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+
+	link := &repository.Link{
 		Code:      code,
 		URL:       url,
 		ExpiresAt: expiresAt,
 	}
-	if err := s.repo.Create(ctx, l); err != nil {
+
+	if err := s.repo.Create(ctx, link); err != nil {
 		return "", nil, err
 	}
+
 	return code, expiresAt, nil
+}
+
+func (s *Service) withAlias(ctx context.Context, url, alias string, expiresAt *time.Time) (string, *time.Time, error) {
+	if err := s.aliasAvailable(ctx, alias); err != nil {
+		return "", nil, err
+	}
+
+	link := &repository.Link{
+		Code:      alias,
+		URL:       url,
+		ExpiresAt: expiresAt,
+	}
+
+	if err := s.repo.Create(ctx, link); err != nil {
+		return "", nil, err
+	}
+
+	return alias, expiresAt, nil
+}
+
+func (s *Service) aliasAvailable(ctx context.Context, alias string) error {
+	existing, err := s.repo.GetByCode(ctx, alias)
+	if err != nil {
+		return err
+	}
+
+	if existing == nil {
+		return nil
+	}
+
+	if !isExpired(existing) {
+		return ErrAliasBusy
+	}
+
+	return s.repo.SoftDelete(ctx, alias)
 }
 
 func (s *Service) generateCode(ctx context.Context) (string, error) {

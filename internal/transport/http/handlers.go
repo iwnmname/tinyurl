@@ -59,7 +59,8 @@ func (h *Handlers) Shorten(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, msg, http.StatusBadRequest)
 
 		default:
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "invalid request format", http.StatusBadRequest)
+			h.log.Warn("shorten: decode error", "err", err)
 		}
 
 		h.log.Warn("shorten: bad JSON", "err", err)
