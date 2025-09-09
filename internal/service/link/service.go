@@ -33,6 +33,10 @@ func (s *Service) Shorten(ctx context.Context, url, alias string, ttlDays int) (
 		return "", nil, errors.New("empty url")
 	}
 
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = "https://" + url
+	}
+
 	var expiresAt *time.Time
 	if ttlDays > 0 {
 		t := time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour)

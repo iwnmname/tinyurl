@@ -29,6 +29,10 @@ func Build(ctx context.Context, cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
+	if err := sqlite.Migrate(ctx, db.DB); err != nil {
+		return nil, err
+	}
+
 	var linkRepo repository.LinkRepository = sqlrepo.NewLinkRepo(db.DB)
 	linkSvc := link.New(linkRepo)
 

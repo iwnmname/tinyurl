@@ -97,17 +97,24 @@ func (h *Handlers) Shorten(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) Redirect(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimPrefix(r.URL.Path, "/r/")
+
+	h.log.Info("redirect request", "path", r.URL.Path, "code", code)
+
 	if code == "" || strings.Contains(code, "/") {
 		http.NotFound(w, r)
+		h.log.Warn("invalid code format", "code", code)
 		return
 	}
+
 	url, err := h.svc.Resolve(r.Context(), code)
 	if err != nil {
 		http.NotFound(w, r)
+		h.log.Warn("code not found", "code", code, "error", err)
 		return
 	}
+
 	http.Redirect(w, r, url, http.StatusFound)
-	h.log.Info("redirect", "code", code, "to", url)
+	h.log.Info("redirect success", "code", code, "to", url)
 }
 
 func (h *Handlers) Stats(w http.ResponseWriter, r *http.Request) {
